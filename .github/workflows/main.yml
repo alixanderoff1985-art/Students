@@ -1,0 +1,94 @@
+name: Build Ustadh Hassan Al-Assi Attendance APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Locate and extract project ZIP (or use extracted project)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' -print | sort | head -n 1 || true)"
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Found project archive: $ZIP_FILE"
+            mkdir -p "$RUNNER_TEMP/attendance-source"
+            unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/attendance-source"
+            PROJECT_FILE="$(find "$RUNNER_TEMP/attendance-source" -type f -name settings.gradle -print -quit)"
+            if [ -z "$PROJECT_FILE" ]; then
+              echo "ERROR: ZIP was found but does not contain settings.gradle"
+              exit 1
+            fi
+            PROJECT_DIR="$(dirname "$PROJECT_FILE")"
+          elif [ -f settings.gradle ]; then
+            echo "No ZIP found; using project files in repository root."
+            PROJECT_DIR="$GITHUB_WORKSPACE"
+          else
+            echo "ERROR: No project ZIP and no settings.gradle in repository root."
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Using project directory: $PROJECT_DIR"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Verify project structure and SDK
+        run: |
+          cd "$PROJECT_DIR"
+          test -f settings.gradle
+          test -f build.gradle
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
+          test -f app/src/main/java/com/baniyas/stafftracker/MainActivity.java
+          test -f app/src/main/java/com/baniyas/stafftracker/AttendanceDb.java
+          test -f app/src/main/java/com/baniyas/stafftracker/AttendanceServer.java
+          test -f app/src/main/assets/admin.html
+          test -f app/src/main/assets/employee.html
+          test -d "$ANDROID_HOME/platforms/android-35"
+          java -version
+          gradle --version
+
+      - name: Build Android APK
+        run: cd "$PROJECT_DIR" && gradle --no-daemon clean :app:assembleDebug
+
+      - name: Verify APK
+        run: |
+          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          ls -lh "$APK"
+          sha256sum "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: USTADH-HASSAN-ALASSI-APK
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
